@@ -1,0 +1,193 @@
+---
+- name: Setup docker and create webserver with replicatable database
+  hosts: testing_servers
+  become: yes
+  vars:
+    postgres_version: latest
+    master_conf: postgre_master.conf
+    slave_conf: postgre_slave.conf
+    admin_name: admin
+    admin_password: sde139sdjg243
+    replication_user: replicator
+    replication_password: as9120siogo
+    db_name: postgres
+  tasks:
+  - name: Update packages
+    shell: 'apt update'
+  - name: Install curl
+    apt: name=curl state=latest
+  - name: Install Python3
+    apt: name=python3-dev state=latest
+  - name: Install pip3
+    apt: name=python3-pip state=latest
+  - name: Install libpq-dev
+    apt: name=libpq-dev state=latest
+  - name: Install psycopg2
+    shell: 'pip3 install psycopg2'
+  - name: Install docker via official script
+    shell: 'curl -sSL https://get.docker.com | sh'
+  - name: Install docker compose
+    apt: name=docker-compose state=latest
+  - name: Up docker network
+    docker_network:
+      name: postgres_network
+
+  - name: Start master DB container
+    docker_container:
+      name: postgres_master
+      image: "postgres:{{ postgres_version }}"
+      env:
+        POSTGRES_USER: "{{ admin_name }}"
+        POSTGRES_PASSWORD: "{{ admin_password }}"
+        POSTGRES_DB: "{{ db_name }}"
+      volumes:
+        - /var/lib/postgresql/master-data:/var/lib/postgresql/data
+        - /etc/postgresql/postgre_master.conf:/etc/postgresql/postgresql.conf
+      command: >
+        -c 'listen_addresses=*'
+        -c 'wal_level=replica'
+        -c 'max_wal_senders=10'
+        -c 'wal_keep_size=64'
+      ports:
+        - "5432:5432"
+      networks:
+        - name: postgres_network
+  - name: Check master
+    wait_for:
+      port: 5432
+      delay: 5
+  - name: Modify pg_hba.conf inside Docker container
+    community.docker.docker_container_exec:
+      container: postgres_master
+      command: /bin/bash -c "echo 'host replication replicator 0.0.0.0/0 md5' >> /var/lib/postgresql/data/pg_hba.conf"
+  - name: Reload pg_hba.conf inside Docker container
+    community.docker.docker_container_exec:
+      container: postgres_master
+      command: /bin/bash -c "psql -h localhost postgres -U admin -c \"SELECT pg_reload_conf();\""
+  - name: Create replicator
+    community.postgresql.postgresql_user:
+      db: "{{ db_name }}"
+      port: 5432
+      name: "{{ replication_user }}"
+      password: "{{ replication_password }}"
+      role_attr_flags: LOGIN,REPLICATION
+      login_host: 127.0.0.1
+      login_user: "{{ admin_name }}"
+      login_password: "{{ admin_password }}"
+  - name: Create tables by schema in master db
+    community.postgresql.postgresql_query:
+      db: "{{ db_name }}"
+      port: 5432
+      login_host: 127.0.0.1
+      login_user: "{{ admin_name }}"
+      login_password: "{{ admin_password }}"
+      query: "{{ item }}"
+    loop:
+      - "CREATE TABLE IF NOT EXISTS \"User\"(\"UserID\" SERIAL PRIMARY KEY, \"FullName\" VARCHAR(255), \"Login\" VARCHAR(255), \"HashPassword\" VARCHAR(255), \"Email\" VARCHAR(255), \"PhoneNumber\" VARCHAR(255));"
+      - "CREATE TABLE IF NOT EXISTS \"Permission\"(\"PermissionID\" SERIAL PRIMARY KEY, \"Name\" VARCHAR(255));"
+      - "CREATE TABLE IF NOT EXISTS \"UserPermission\"(\"UserPermissionID\" SERIAL PRIMARY KEY, \"UserID\" INT REFERENCES \"User\"(\"UserID\"), \"PermissionID\" INT REFERENCES \"Permission\"(\"PermissionID\"));"
+  - name: Insert Test Data
+    community.postgresql.postgresql_query:
+      db: "{{ db_name }}"
+      login_host: 127.0.0.1
+      login_user: "{{ admin_name }}"
+      login_password: "{{ admin_password }}"
+      query: "{{ item }}"
+    loop:
+      - "INSERT INTO \"User\"(\"FullName\", \"Login\", \"HashPassword\", \"Email\", \"PhoneNumber\") VALUES('Yar Domansky', 'ydmnsky', 'hashedpassword', 'y@dmnsky.ru', '1234567890');"
+      - "INSERT INTO \"Permission\"(\"Name\") VALUES('Read');"
+      - "INSERT INTO \"Permission\"(\"Name\") VALUES('Write');"
+      - "INSERT INTO \"UserPermission\"(\"UserID\", \"PermissionID\") SELECT u.\"UserID\", p.\"PermissionID\" FROM \"User\" u CROSS JOIN \"Permission\" p WHERE u.\"Login\" = 'ydmnsky' AND p.\"Name\" = 'Read';"
+      - "INSERT INTO \"UserPermission\"(\"UserID\", \"PermissionID\") SELECT u.\"UserID\", p.\"PermissionID\" FROM \"User\" u CROSS JOIN \"Permission\" p WHERE u.\"Login\" = 'ydmnsky' AND p.\"Name\" = 'Write';"
+  - name: Start slave DB container
+    docker_container:
+      name: postgres_slave
+      image: "postgres:{{ postgres_version }}"
+      env:
+        POSTGRES_USER: "slave_user"
+        POSTGRES_PASSWORD: "slave_password"
+        POSTGRES_DB: "{{ db_name }}"
+      volumes:
+        - /var/lib/postgresql/slave-data:/var/lib/postgresql/data
+        - /etc/postgresql/porsgre_slave.conf:/etc/postgresql/postgresql.conf
+      command: >
+        -c "primary_conninfo= host=postgres_master port=5432 user={{ replication_user }} password={{ replication_password  }}"
+      networks:
+        - name: postgres_network
+    tags:
+      - slave_start
+  - name: Ensure the standby.signal file exists for slave
+    ansible.builtin.file:
+      path: "/var/lib/postgresql/slave-data/standby.signal"
+      state: touch
+  
+  - name: Synchronize directory excluding dot files
+    ansible.builtin.synchronize:
+      src: ./web_server/
+      dest: /tmp/web_server/
+      rsync_opts:
+        - "--exclude=.*"
+    delegate_to: localhost
+    become: no
+    tags:
+      - web_server
+  - name: Build Flask web server docker image
+    community.docker.docker_image:
+      build:
+        path: "/tmp/web_server"
+      name: webserver
+      source: build
+    tags:
+      - web_server
+  - name: Run first Flask web server
+    community.docker.docker_container:
+      name: webserver1
+      image: webserver
+      env:
+        DATABASE_NAME: "{{ db_name }}"
+        DATABASE_USER: "{{ admin_name }}"
+        DATABASE_PASSWORD: "{{ admin_password }}"
+        DATABASE_HOST: "postgres_master"
+        DATABASE_PORT: "5432"
+      networks:
+        - name: postgres_network
+      restart_policy: unless-stopped
+    tags: 
+      - web_server
+  - name: Run second Flask web server
+    community.docker.docker_container:
+      name: webserver2
+      image: webserver
+      env:
+        DATABASE_NAME: "{{ db_name }}"
+        DATABASE_USER: "{{ admin_name }}"
+        DATABASE_PASSWORD: "{{ admin_password }}"
+        DATABASE_HOST: "postgres_master"
+        DATABASE_PORT: "5432"
+      networks:
+        - name: postgres_network
+      restart_policy: unless-stopped
+    tags: 
+      - web_server
+  - name: Copy Nginx configuration for load balancing
+    ansible.builtin.copy:
+      src: nginx.conf
+      dest: /etc/nginx.conf
+    tags:
+      - web_server
+  - name: Run Nginx container
+    community.docker.docker_container:
+      name: nginx
+      image: nginx:latest
+      volumes:
+        - "/etc/nginx.conf:/etc/nginx/nginx.conf"
+      ports:
+        - "80:80"
+      networks:
+        - name: postgres_network
+      restart_policy: unless-stopped
+      state: started
+      detach: true
+    tags:
+      - web_server
+...

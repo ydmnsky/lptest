@@ -1,0 +1,2 @@
+[testing_servers]
+ubuntu1804_01 ansible_host=83.147.246.130 ansible_user=root
