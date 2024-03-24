@@ -10,8 +10,11 @@
     admin_password: sde139sdjg243
     replication_user: replicator
     replication_password: as9120siogo
+    user_name: user
+    user_password: easy_password_idk
     db_name: postgres
     vault_token_id: auufp3sad
+    control_node_ip: 162.33.177.160
   tasks:
   - name: Update packages
     shell: 'apt update'
@@ -72,6 +75,16 @@
       name: "{{ replication_user }}"
       password: "{{ replication_password }}"
       role_attr_flags: LOGIN,REPLICATION
+      login_host: 127.0.0.1
+      login_user: "{{ admin_name }}"
+      login_password: "{{ admin_password }}"
+  - name: Create user
+    community.postgresql.postgresql_user:
+      db: "{{ db_name }}"
+      port: 5432
+      name: "{{ user_name }}"
+      password: "{{ user_password }}"
+      role_attr_flags: LOGIN,NOCREATEROLE
       login_host: 127.0.0.1
       login_user: "{{ admin_name }}"
       login_password: "{{ admin_password }}"
@@ -211,4 +224,75 @@
       restart_policy: unless-stopped
     tags:
       - web_server
+  
+
+
+  # - name: Flush current iptables rules
+  #   ansible.builtin.command:
+  #     cmd: iptables -F
+  #   ignore_errors: yes
+  #   tags:
+  #     - ip_tables
+  # - name: Allow current SSH connection
+  #   ansible.builtin.iptables:
+  #     chain: INPUT
+  #     protocol: tcp
+  #     destination_port: 22
+  #     jump: ACCEPT
+  #   tags:
+  #     - ip_tables
+  # - name: Drop INPUT and FORWARD chains by default
+  #   ansible.builtin.iptables:
+  #     chain: "{{ item }}"
+  #     policy: DROP
+  #   loop:
+  #     - INPUT
+  #     - FORWARD
+  #   tags:
+  #     - ip_tables
+  # - name: Allow SSH access from specific IPs
+  #   ansible.builtin.iptables:
+  #     chain: INPUT
+  #     protocol: tcp
+  #     destination_port: 22
+  #     source: "{{ item }}"
+  #     jump: ACCEPT
+  #   loop:
+  #     - "{{ control_node_ip }}"
+  #   tags:
+  #     - ip_tables
+  # - name: Allow all HTTP traffic but limit to 5 connections
+  #   shell: "iptables -A INPUT -p tcp --dport 80 -m connlimit --connlimit-above 5 -j REJECT"
+  #   tags:
+  #     - ip_tables
+  # - name: Allow HTTP traffic
+  #   ansible.builtin.iptables:
+  #     chain: INPUT
+  #     protocol: tcp
+  #     destination_port: 80
+  #     jump: ACCEPT
+  #   tags:
+  #     - ip_tables
+  # - name: Allow FORWARD chain traffic from specific IPs
+  #   ansible.builtin.iptables:
+  #     chain: FORWARD
+  #     source: "{{ item }}"
+  #     jump: ACCEPT
+  #   loop:
+  #     - "{{ control_node_ip }}"
+  #   tags:
+  #     - ip_tables
+  # - name: Ensure /etc/iptables directory exists
+  #   ansible.builtin.file:
+  #     path: /etc/iptables
+  #     state: directory
+  #     mode: '0755'
+  #   tags:
+  #     - ip_tables
+  #     - last_one
+  # - name: Save iptables settings
+  #   shell: "iptables-save > /etc/iptables/rules.v4"
+  #   tags:
+  #     - ip_tables
+  #     - last_one
 ...
