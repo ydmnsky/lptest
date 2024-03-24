@@ -3,7 +3,7 @@ FROM python:3.9-slim
 WORKDIR /app
 COPY . /app
 
-RUN pip install --no-cache-dir flask flask_sqlalchemy psycopg2-binary
+RUN pip install --no-cache-dir flask flask_sqlalchemy hvac psycopg2-binary
 
 ENV DATABASE_NAME=postgres
 ENV DATABASE_USER=admin

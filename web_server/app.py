@@ -1,14 +1,22 @@
 # app.py
 import os
+import hvac
 
 from flask import Flask, render_template
 from flask_sqlalchemy import SQLAlchemy
 
 database_name = os.getenv('DATABASE_NAME')
-database_user = os.getenv('DATABASE_USER')
-database_password = os.getenv('DATABASE_PASSWORD')
 database_host = os.getenv('DATABASE_HOST')
 database_port = os.getenv('DATABASE_PORT')
+
+client = hvac.Client(url='http://vault:8200', token=os.environ['VAULT_TOKEN'])
+read_response = client.secrets.kv.v2.read_secret_version(path='myapp/db')
+db_credentials = read_response['data']['data']
+
+database_user = db_credentials['username']
+print(database_user)
+database_password = db_credentials['password']
+print(database_password)
 
 app = Flask(__name__)
 
